@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-#  (C) Copyright IBM Corp. 2021, 2022
+#  (C) Copyright IBM Corp. 2021,2022
 #
 #  SPDX-License-Identifier: Apache-2.0
 #
@@ -37,6 +37,26 @@ fi
 curl -sSL "https://${gitApiKey}@raw.githubusercontent.com/WH-WH-de-identification/de-id-devops/${DEVOPS_BRANCH}/scripts/de-identification-settings.xml" > ${HOME}/.m2/settings.xml
 
 #########################################################
+# Check Java target version                             #
+#                                                       #
+# To change the release level used to build the jars,   #
+# add this parameter to the CI toolchain after it is    #
+# built.  Values are Java releases such as 8 or 11.     #
+#########################################################
+if [ ! -z "$JAVA_COMPILER_RELEASE" ]; then
+	JAVA_RELEASE="-java${JAVA_COMPILER_RELEASE}"
+	mvn --no-transfer-progress versions:set-property -Dproperty=maven.compiler.release -DnewVersion=${JAVA_COMPILER_RELEASE}
+	rc=$((rc || $? ))
+	if [[ ! "$rc" == "0" ]]; then
+    	echo "BUILD FAILURE; COULD NOT UPDATE MAVEN JAVA COMPILER VERSION";
+    	exit $rc;
+	fi	
+else
+	JAVA_RELEASE=
+    echo building jars at default Java release level
+fi
+
+#########################################################
 # Set the version                                       #
 #########################################################
 # If the branch is master, use the ${RELEASE_VERSION}-SNAPSHOT.
@@ -46,35 +66,14 @@ RELEASE_VERSION=1.1.3
 RELEASE_BUILD=false
 GIT_BRANCH=`git rev-parse --abbrev-ref HEAD`
 if [ "$GIT_BRANCH" == "master" ]; then
-    echo "-Drevision=${RELEASE_VERSION}-SNAPSHOT" > .mvn/maven.config
+    echo "-Drevision=${RELEASE_VERSION}${JAVA_RELEASE}-SNAPSHOT" > .mvn/maven.config
 elif [[ "${GIT_BRANCH}" == "release"* ]]; then
-    echo "-Drevision=${RELEASE_VERSION}" > .mvn/maven.config
+    echo "-Drevision=${RELEASE_VERSION}${JAVA_RELEASE}" > .mvn/maven.config
     RELEASE_BUILD=true
 else
-    echo "-Drevision=${RELEASE_VERSION}-${GIT_BRANCH}-SNAPSHOT" > .mvn/maven.config
+    echo "-Drevision=${RELEASE_VERSION}-${GIT_BRANCH}${JAVA_RELEASE}-SNAPSHOT" > .mvn/maven.config
 fi
 cat .mvn/maven.config
-
-#########################################################
-# CI Validate                                           #
-#########################################################
-# If we are running ci validate toolchain, just build the jar files and exit
-echo "Taskname $taskname"
-if [ "$taskname" == "civalidate" ]; then
-  # In CIVALIDATE we need the settings.xml in same directory
-  # and a maven repository.  The jar file dependencies are download in this step
-  # so that later in sonarqube stages, the jar files are available.
-  mkdir -p ./m2/repository
-  curl -sSL "https://${gitApiKey}@raw.githubusercontent.com/WH-WH-de-identification/de-id-devops/${DEVOPS_BRANCH}/scripts/de-identification-settings.xml" > ./m2/settings.xml
-
-  mvn -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn clean install -Dmaven.repo.local=./m2/repository
-
-  # Run the sonarqube scan.  This scan is going to fail as there is no sonarqube pod running yet.
-  # The purpose is for maven to download the correct dependencies for sonarqube.
-  echo "Running sonarqube to get dependencies.  This is expected to fail."
-  mvn sonar:sonar -B -Dorg.slf4j.simpleLogger.log.org.apache.maven.cli.transfer.Slf4jMavenTransferListener=warn -Dmaven.repo.local=./m2/repository
-  exit 0
-fi
 
 #########################################################
 # Main build                                            #
@@ -91,9 +90,9 @@ fi
 # Deploy the binaries to artifactory using maven        #
 #########################################################
 if [ "${RELEASE_BUILD}" == "true" ]; then
-    MAVEN_REPO=releases::default::https://na.artifactory.swg-devops.com:443/artifactory/wh-de-id-release-maven-local
+    MAVEN_REPO=releases::default::https://artifactory.commops.truvenhealth.com:443/artifactory/wh-de-id-release-maven-local
 else    
-    MAVEN_REPO=snapshots::default::https://na.artifactory.swg-devops.com:443/artifactory/wh-de-id-snapshot-maven-local
+    MAVEN_REPO=snapshots::default::https://artifactory.commops.truvenhealth.com:443/artifactory/wh-de-id-snapshot-maven-local
 fi
 
 mvn -B deploy -DaltDeploymentRepository=${MAVEN_REPO} -DskipTests=true
